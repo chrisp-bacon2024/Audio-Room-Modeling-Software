@@ -1,11 +1,14 @@
 """2D rectangular room model for acoustic simulation.
 
-Defines a room (floor plan), a source and receiver position, and
-path_length() for direct distance in feet. Used as the basis for
-image-source and RIR computation.
+Defines a room (floor plan), a source and receiver position,
+path_length() for direct distance, image-source positions for first-order
+reflections, and reflection_paths_first_order() for delay and gain of each
+path. Used as the basis for RIR computation. Units are feet; acoustics
+constants (speed of sound, reflection coefficient) come from constants.
 """
 
 import math
+from constants import SPEED_OF_SOUND, EPSILON, REFLECTION_COEFFICIENT
 
 
 class Source2D:
@@ -61,7 +64,7 @@ class Room2D:
         else:
             raise ValueError("Receiver position is outside of the room.")
     
-    def image_sources_first_order(self) -> list[dict[str, float]]:
+    def image_sources_first_order(self) -> list[Source2D]:
         """First-order image sources: one reflection off each of the four walls.
 
         For each wall, the source is mirrored across that wall to form an
@@ -70,10 +73,9 @@ class Room2D:
         Used to compute delays and levels for early reflections in the RIR.
 
         Returns:
-            List of four image positions, in order: left, bottom, right, top.
-            Each element is a dict with keys ``'x'`` and ``'y'`` (same units
-            as the room, e.g. feet). The distance from ``(img['x'], img['y'])``
-            to ``self.receiver`` is the one-bounce path length for that wall.
+            List of four Source2D positions, in order: left, bottom, right, top.
+            The distance from each image to ``self.receiver`` (via path_length)
+            is the one-bounce path length for that wall.
         """
         image_sources = []
 
@@ -101,9 +103,44 @@ class Room2D:
                     image_y = wall['y'] - source_y_distance
                 image_x = source.x
             
-            image_sources.append({'x': image_x, 'y': image_y})
+            image_sources.append(Source2D(position=(image_x, image_y)))
         
         return image_sources
+
+    @property
+    def direct_path_length(self) -> float:
+        """Direct path length from source to receiver (same units as room)."""
+        return path_length(self.source, self.receiver)
+
+    def reflection_paths_first_order(self) -> list[dict[str, float]]:
+        """Delay and gain for direct path plus four first-order reflections.
+
+        Uses inverse-distance law for gain and a per-bounce reflection
+        coefficient for reflected paths. Speed of sound and coefficients
+        are taken from the constants module.
+
+        Returns:
+            List of 5 dicts, each with keys ``'delay'`` (seconds) and
+            ``'gain'`` (linear). Order: direct, then left, bottom, right,
+            top wall reflections. Use this list to build the RIR (place
+            a dirac at each delay with the corresponding gain).
+        """
+        image_sources = self.image_sources_first_order()
+
+        paths = []
+
+        direct_path_length = self.direct_path_length
+        direct_delay = direct_path_length / SPEED_OF_SOUND
+        direct_gain = 1 / (direct_path_length + EPSILON)
+        paths.append({'delay': direct_delay, 'gain': direct_gain})
+
+        for image_source in image_sources:
+            image_path_length = path_length(image_source, self.receiver)
+            image_delay = image_path_length / SPEED_OF_SOUND
+            image_gain = 1 / (image_path_length + EPSILON) * REFLECTION_COEFFICIENT
+            paths.append({'delay': image_delay, 'gain': image_gain})
+        
+        return paths
 
 
 
@@ -118,3 +155,26 @@ def path_length(p1: Source2D | Receiver2D, p2: Source2D | Receiver2D) -> float:
         Distance in feet.
     """
     return math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2)
+
+
+if __name__ == "__main__":
+    # Sanity checks for reflection_paths_first_order (Task 1.4)
+    room = Room2D(
+        width=5.0,
+        length=4.0,
+        source=Source2D((-1.0, -2.0)),
+        receiver=Receiver2D((1.0, -1.0)),
+    )
+    paths = room.reflection_paths_first_order()
+    assert len(paths) == 5, f"expected 5 paths, got {len(paths)}"
+    direct = paths[0]
+    assert "delay" in direct and "gain" in direct
+    assert direct["delay"] > 0 and direct["gain"] > 0
+    for i, p in enumerate(paths[1:], start=1):
+        assert p["delay"] >= direct["delay"], f"path {i} delay should be >= direct"
+        assert p["gain"] <= direct["gain"], f"path {i} gain should be <= direct"
+    expected_delay = room.direct_path_length / SPEED_OF_SOUND
+    expected_gain = 1 / (room.direct_path_length + EPSILON)
+    assert abs(direct["delay"] - expected_delay) < 1e-12
+    assert abs(direct["gain"] - expected_gain) < 1e-12
+    print("reflection_paths_first_order: all checks passed.")
