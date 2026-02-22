@@ -14,10 +14,11 @@ from constants import SPEED_OF_SOUND, EPSILON, REFLECTION_COEFFICIENT
 class Source2D:
     """A point source in 2D (e.g. speaker position)."""
 
-    def __init__(self, position: tuple[float, float]) -> None:
+    def __init__(self, position: tuple[float, float], power: float = 100) -> None:
         """Set source position in feet. position is (x, y)."""
         self.x = position[0]
         self.y = position[1]
+        self.power = power # in dB
 
 
 class Receiver2D:
