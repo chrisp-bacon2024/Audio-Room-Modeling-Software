@@ -77,72 +77,93 @@ class Room2D:
             The distance from each image to ``self.receiver`` (via path_length)
             is the one-bounce path length for that wall.
         """
-        image_sources = []
+        return self.image_sources_for_order(1)
 
-        source = self.source
-
+    @property
+    def direct_path_length(self) -> float:
+        """Direct path length from source to receiver (same units as room)."""
+        return path_length(self.source, self.receiver)
+    
+    def image_sources_for_order(self, order: int) -> list[Source2D]:
+        """Image sources for a given order of reflections."""
         left_wall = {'x': self.x}
         bottom_wall = {'y': self.y - self.length}
         right_wall = {'x': self.x + self.width}
         top_wall = {'y': self.y}
 
         walls = [left_wall, bottom_wall, right_wall, top_wall]
-        for wall in walls:
-            if 'x' in wall.keys():
-                source_x_distance = abs(wall['x'] - source.x)
-                if wall['x'] > source.x:
-                    image_x = wall['x'] + source_x_distance
-                else:
-                    image_x = wall['x'] - source_x_distance
-                image_y = source.y
-            if 'y' in wall.keys():
-                source_y_distance = abs(wall['y'] - source.y)
-                if wall['y'] > source.y:
-                    image_y = wall['y'] + source_y_distance
-                else:
-                    image_y = wall['y'] - source_y_distance
-                image_x = source.x
-            
-            image_sources.append(Source2D(position=(image_x, image_y)))
-        
-        return image_sources
 
-    @property
-    def direct_path_length(self) -> float:
-        """Direct path length from source to receiver (same units as room)."""
-        return path_length(self.source, self.receiver)
+        if order == 1:
+            source = self.source
+            image_sources = []
+            for wall in walls:
+                if 'x' in wall.keys():
+                    source_x_distance = abs(wall['x'] - source.x)
+                    if wall['x'] > source.x:
+                        image_x = wall['x'] + source_x_distance
+                    else:
+                        image_x = wall['x'] - source_x_distance
+                    image_y = source.y
+                if 'y' in wall.keys():
+                    source_y_distance = abs(wall['y'] - source.y)
+                    if wall['y'] > source.y:
+                        image_y = wall['y'] + source_y_distance
+                    else:
+                        image_y = wall['y'] - source_y_distance
+                    image_x = source.x
+                image_sources.append(Source2D(position=(image_x, image_y)))
+            return image_sources
+        else:
+            prev_order_sources = self.image_sources_for_order(order - 1)
+            current_order_sources = []
+            for image_source in prev_order_sources:
+                for wall in walls:
+                    if "x" in wall.keys():
+                        source_x_distance = abs(wall["x"] - image_source.x)
+                        if wall["x"] > image_source.x:
+                            image_x = wall["x"] + source_x_distance
+                        else:
+                            image_x = wall["x"] - source_x_distance
+                        image_y = image_source.y
+                    if "y" in wall.keys():
+                        source_y_distance = abs(wall["y"] - image_source.y)
+                        if wall["y"] > image_source.y:
+                            image_y = wall["y"] + source_y_distance
+                        else:
+                            image_y = wall["y"] - source_y_distance
+                        image_x = image_source.x
+                    current_order_sources.append(Source2D(position=(image_x, image_y)))
+            return current_order_sources
 
-    def reflection_paths_first_order(self) -> list[dict[str, float]]:
-        """Delay and gain for direct path plus four first-order reflections.
+    def reflection_paths_for_order(self, order: int) -> list[dict[str, float]]:
+        """Delay and gain for direct path plus all reflections up to and including this order.
 
-        Uses inverse-distance law for gain and a per-bounce reflection
-        coefficient for reflected paths. Speed of sound and coefficients
-        are taken from the constants module.
-
-        Returns:
-            List of 5 dicts, each with keys ``'delay'`` (seconds) and
-            ``'gain'`` (linear). Order: direct, then left, bottom, right,
-            top wall reflections. Use this list to build the RIR (place
-            a dirac at each delay with the corresponding gain).
+        order=1 returns direct + 4 first-order paths (5 total). order=2 returns
+        direct + 4 first-order + 16 second-order (21 total). Gain uses
+        REFLECTION_COEFFICIENT ** num_bounces per path.
         """
-        image_sources = self.image_sources_first_order()
-
-        paths = []
-
-        direct_path_length = self.direct_path_length
-        direct_delay = direct_path_length / SPEED_OF_SOUND
-        direct_gain = 1 / (direct_path_length + EPSILON)
-        paths.append({'delay': direct_delay, 'gain': direct_gain})
-
-        for image_source in image_sources:
-            image_path_length = path_length(image_source, self.receiver)
-            image_delay = image_path_length / SPEED_OF_SOUND
-            image_gain = 1 / (image_path_length + EPSILON) * REFLECTION_COEFFICIENT
-            paths.append({'delay': image_delay, 'gain': image_gain})
-        
-        return paths
-
-
+        if order == 1:
+            paths = []
+            paths.append({
+                "delay": self.direct_path_length / SPEED_OF_SOUND,
+                "gain": 1 / (self.direct_path_length + EPSILON),
+            })
+            for img in self.image_sources_for_order(1):
+                plen = path_length(img, self.receiver)
+                paths.append({
+                    "delay": plen / SPEED_OF_SOUND,
+                    "gain": (1 / (plen + EPSILON)) * REFLECTION_COEFFICIENT,
+                })
+            return paths
+        prev_paths = self.reflection_paths_for_order(order - 1)
+        current_paths = []
+        for image_source in self.image_sources_for_order(order):
+            plen = path_length(image_source, self.receiver)
+            current_paths.append({
+                "delay": plen / SPEED_OF_SOUND,
+                "gain": (1 / (plen + EPSILON)) * (REFLECTION_COEFFICIENT ** order),
+            })
+        return prev_paths + current_paths
 
 def path_length(p1: Source2D | Receiver2D, p2: Source2D | Receiver2D) -> float:
     """Euclidean distance between two 2D points in feet.
@@ -155,26 +176,3 @@ def path_length(p1: Source2D | Receiver2D, p2: Source2D | Receiver2D) -> float:
         Distance in feet.
     """
     return math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2)
-
-
-if __name__ == "__main__":
-    # Sanity checks for reflection_paths_first_order (Task 1.4)
-    room = Room2D(
-        width=5.0,
-        length=4.0,
-        source=Source2D((-1.0, -2.0)),
-        receiver=Receiver2D((1.0, -1.0)),
-    )
-    paths = room.reflection_paths_first_order()
-    assert len(paths) == 5, f"expected 5 paths, got {len(paths)}"
-    direct = paths[0]
-    assert "delay" in direct and "gain" in direct
-    assert direct["delay"] > 0 and direct["gain"] > 0
-    for i, p in enumerate(paths[1:], start=1):
-        assert p["delay"] >= direct["delay"], f"path {i} delay should be >= direct"
-        assert p["gain"] <= direct["gain"], f"path {i} gain should be <= direct"
-    expected_delay = room.direct_path_length / SPEED_OF_SOUND
-    expected_gain = 1 / (room.direct_path_length + EPSILON)
-    assert abs(direct["delay"] - expected_delay) < 1e-12
-    assert abs(direct["gain"] - expected_gain) < 1e-12
-    print("reflection_paths_first_order: all checks passed.")

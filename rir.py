@@ -25,7 +25,7 @@ def plot_rir(rir: np.ndarray, sample_rate: int = 48000) -> None:
 if __name__ == "__main__":
     from room_2d import Room2D, Source2D, Receiver2D
     room = Room2D(5.0, 4.0, Source2D((-1.0, -2.0)), Receiver2D((1.0, -1.0)))
-    paths = room.reflection_paths_first_order()
+    paths = room.reflection_paths_for_order(9)
     rir = build_rir(paths)
     # rir has length 24000, max 1.0, five spikes
     plot_rir(rir)  # opens plot window
